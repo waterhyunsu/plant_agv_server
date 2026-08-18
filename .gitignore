@@ -1,4 +1,4 @@
 __pycache__/
 *.py[cod]
 .env
-plant_agv.db
+*.db
