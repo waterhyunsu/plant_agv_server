@@ -1,6 +1,6 @@
 # Plant Watering AGV Server v2.0
 
-화분 수분 상태를 감지해 AGV 이동과 **급수 모터 Arduino2** 동작을 순서대로 관리하는 중앙 서버입니다.
+화분 수분 상태를 감지해 AGV 이동과 급수 모터 Arduino2 동작을 순서대로 관리하는 중앙 서버입니다.
 
 ```text
 수분 센서 → FastAPI 서버 → 급수 Task → AGV → 급수 모터 Arduino2 → 로그/GUI
@@ -36,7 +36,7 @@ Swagger: `http://127.0.0.1:8000/docs`
 ## 주요 API
 
 | 담당 | API |
-|---|---|
+
 | 센서 | `POST /api/plants/{plant_id}/moisture` |
 | AGV | `GET /api/agv/command`, `POST /api/agv/telemetry` |
 | 급수 모터 Arduino2 | `GET /api/watering/command`, `POST /api/watering/telemetry`, `GET /api/watering/device-status` |

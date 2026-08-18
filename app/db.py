@@ -3,7 +3,7 @@
 import sqlite3
 from contextlib import contextmanager
 from datetime import datetime
-from .config import DB_PATH, DEFAULT_WATERING_AMOUNT_ML
+from .config import DB_PATH
 
 
 def now_iso() -> str:
@@ -34,7 +34,6 @@ def init_db():
             moisture REAL NOT NULL DEFAULT 0,
             threshold REAL NOT NULL DEFAULT 30,
             status TEXT NOT NULL DEFAULT 'UNKNOWN',
-            watering_amount_ml REAL NOT NULL DEFAULT 80,
             updated_at TEXT NOT NULL
         );
 
@@ -49,7 +48,6 @@ def init_db():
         CREATE TABLE IF NOT EXISTS watering_tasks (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             plant_id INTEGER NOT NULL,
-            amount_ml REAL NOT NULL,
             status TEXT NOT NULL,
             source TEXT NOT NULL,
             created_at TEXT NOT NULL,
@@ -61,7 +59,6 @@ def init_db():
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             task_id INTEGER NOT NULL,
             plant_id INTEGER NOT NULL,
-            amount_ml REAL NOT NULL,
             result TEXT NOT NULL,
             created_at TEXT NOT NULL
         );
@@ -100,22 +97,13 @@ def init_db():
 
         if count == 0:
             plants = [
-                (1, "화분 1", 0, 50, 30, "NORMAL",
-                 DEFAULT_WATERING_AMOUNT_ML, now_iso()),
-                (2, "화분 2", 100, 50, 30, "NORMAL",
-                 DEFAULT_WATERING_AMOUNT_ML, now_iso()),
-                (3, "화분 3", 200, 50, 30, "NORMAL",
-                 DEFAULT_WATERING_AMOUNT_ML, now_iso()),
-                (4, "화분 4", 300, 50, 30, "NORMAL",
-                 DEFAULT_WATERING_AMOUNT_ML, now_iso()),
-                (5, "화분 5", 400, 50, 30, "NORMAL",
-                 DEFAULT_WATERING_AMOUNT_ML, now_iso()),
+                (1, "화분 1", 0, 50, 30, "NORMAL", now_iso()),
+                (2, "화분 2", 100, 50, 30, "NORMAL", now_iso()),
             ]
             conn.executemany("""
                 INSERT INTO plants
-                (id, name, position, moisture, threshold, status,
-                 watering_amount_ml, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                (id, name, position, moisture, threshold, status, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
             """, plants)
 
         # AGV와 급수 모터 Arduino2는 각각 한 대를 관리하므로 id=1인 상태 행을 사용한다.

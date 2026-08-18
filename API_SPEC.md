@@ -2,9 +2,9 @@
 
 ## 공통
 
-- Base URL: `http://<서버-PC-IP>:8000`
+- Base URL: `http://192.168.0.51:8000`
 - 통신: HTTP REST / JSON / Wi-Fi
-- Swagger: `http://<서버-PC-IP>:8000/docs`
+- Swagger: `http://192.168.0.51:8000/docs`
 - 급수 장치: **급수 모터 Arduino2**. Trailer는 사용하지 않는다.
 
 ## 핵심 자동 급수 흐름

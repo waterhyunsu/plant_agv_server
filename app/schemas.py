@@ -17,7 +17,6 @@ class MoistureReport(BaseModel):
 class ManualWateringRequest(BaseModel):
     """GUI에서 생성하는 강제 급수 요청."""
     plant_id: int
-    amount_ml: float = Field(gt=0, le=200)
 
 
 class AGVTelemetry(BaseModel):

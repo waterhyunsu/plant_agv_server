@@ -56,7 +56,7 @@ def has_active_task(conn, plant_id: int) -> bool:
     return row is not None
 
 
-def create_task(conn, plant_id: int, amount_ml: float, source: str):
+def create_task(conn, plant_id: int, source: str):
     """중복을 검사한 뒤 대기(QUEUED) 상태의 급수 Task를 생성한다."""
     ts = now_iso()
 
@@ -66,9 +66,9 @@ def create_task(conn, plant_id: int, amount_ml: float, source: str):
 
     cur = conn.execute("""
         INSERT INTO watering_tasks
-        (plant_id, amount_ml, status, source, created_at, updated_at)
-        VALUES (?, ?, 'QUEUED', ?, ?, ?)
-    """, (plant_id, amount_ml, source, ts, ts))
+        (plant_id, status, source, created_at, updated_at)
+        VALUES (?, 'QUEUED', ?, ?, ?)
+    """, (plant_id, source, ts, ts))
 
     task_id = cur.lastrowid
 
@@ -127,15 +127,16 @@ def set_task_status(conn, task_id: int, status: str, error_message=None):
     """, (status, now_iso(), error_message, task_id))
 
 
-def complete_task(conn, task_id: int, plant_id: int, amount_ml: float):
+def complete_task(conn, task_id: int, plant_id: int):
     """완료된 급수를 이력과 시스템 로그에 기록한다."""
     ts = now_iso()
 
+    # 어느 화분의 급수가 언제 성공했는지만 기록한다.
     conn.execute("""
         INSERT INTO watering_log
-        (task_id, plant_id, amount_ml, result, created_at)
-        VALUES (?, ?, ?, 'SUCCESS', ?)
-    """, (task_id, plant_id, amount_ml, ts))
+        (task_id, plant_id, result, created_at)
+        VALUES (?, ?, 'SUCCESS', ?)
+    """, (task_id, plant_id, ts))
 
     conn.execute("""
         INSERT INTO system_log
@@ -143,10 +144,9 @@ def complete_task(conn, task_id: int, plant_id: int, amount_ml: float):
         VALUES (?, ?, ?, ?)
     """, (
         "WATERING_COMPLETE",
-        f"watering completed for plant {plant_id}, target {amount_ml} mL",
+        f"watering completed for plant {plant_id}",
         task_id,
         ts,
     ))
 
-    # 실제 수분값은 센서가 다시 보고해야 하므로
-    # 서버가 moisture 값을 임의로 NORMAL로 바꾸지는 않는다.
+    # 실제 수분 상태는 급수 후 센서가 다시 전송한 값으로 갱신한다.

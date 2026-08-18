@@ -83,7 +83,6 @@ def dashboard():
             for row in conn.execute("""
                 SELECT id AS task_id,
                        plant_id,
-                       amount_ml,
                        status,
                        source,
                        created_at,
@@ -166,7 +165,6 @@ def report_moisture(plant_id: int, report: MoistureReport):
             task_id = create_task(
                 conn,
                 plant_id,
-                plant["watering_amount_ml"],
                 "AUTO",
             )
 
@@ -235,7 +233,6 @@ def get_agv_command():
             "task_id": task["id"],
             "plant_id": task["plant_id"],
             "target_position": task["target_position"],
-            "amount_ml": task["amount_ml"],
         }
 
 
@@ -355,7 +352,6 @@ def get_watering_command():
             "command": "WATER",
             "task_id": task["id"],
             "plant_id": task["plant_id"],
-            "amount_ml": task["amount_ml"],
         }
 
 
@@ -391,13 +387,18 @@ def watering_device_telemetry(report: WateringDeviceTelemetry):
                 set_task_status(conn, report.task_id, "WATERING")
 
         elif report.state == "COMPLETED":
-            # 완료 시 급수 이력을 남긴다. 수분 정상화는 실제 센서 재측정값으로 판단한다.
+            # WATERING 상태의 Task만 완료 처리해 중복 로그 생성을 막는다.
+            if task["status"] != "WATERING":
+                raise HTTPException(
+                    409,
+                    "Task is not in WATERING state",
+                )
+
             set_task_status(conn, report.task_id, "COMPLETED")
             complete_task(
                 conn,
                 report.task_id,
                 task["plant_id"],
-                task["amount_ml"],
             )
 
         elif report.state == "ERROR":
@@ -434,7 +435,6 @@ def get_watering_tasks():
             for row in conn.execute("""
                 SELECT id AS task_id,
                        plant_id,
-                       amount_ml,
                        status,
                        source,
                        created_at,
@@ -456,7 +456,6 @@ def create_manual_watering(request: ManualWateringRequest):
         task_id = create_task(
             conn,
             request.plant_id,
-            request.amount_ml,
             "MANUAL",
         )
 
@@ -469,7 +468,6 @@ def create_manual_watering(request: ManualWateringRequest):
         return {
             "task_id": task_id,
             "plant_id": request.plant_id,
-            "amount_ml": request.amount_ml,
             "status": "QUEUED",
         }
 
@@ -485,7 +483,6 @@ def get_watering_log():
                     id,
                     task_id,
                     plant_id,
-                    amount_ml,
                     result,
                     created_at
                 FROM watering_log
