@@ -426,7 +426,11 @@ def watering_device_telemetry(report: WateringDeviceTelemetry):
 
         if report.state == "WATERING":
             if task["status"] == "ARRIVED":
-                set_task_status(conn, report.task_id, "WATERING")
+                set_task_status(
+                    conn,
+                    report.task_id,
+                    "WATERING",
+                )
 
         elif report.state == "COMPLETED":
             # WATERING 상태의 Task만 완료 처리해 중복 로그 생성을 막는다.
@@ -436,12 +440,27 @@ def watering_device_telemetry(report: WateringDeviceTelemetry):
                     "Task is not in WATERING state",
                 )
 
-            set_task_status(conn, report.task_id, "COMPLETED")
+            set_task_status(
+                conn,
+                report.task_id,
+                "COMPLETED",
+            )
+
             complete_task(
                 conn,
                 report.task_id,
                 task["plant_id"],
             )
+
+            # 급수 완료 후 급수장치를 대기 상태로 초기화한다.
+            conn.execute("""
+                UPDATE watering_device_status
+                SET state='IDLE',
+                    pump=0,
+                    current_task_id=NULL,
+                    updated_at=?
+                WHERE id=1
+            """, (ts,))
 
         elif report.state == "ERROR":
             set_task_status(
@@ -450,6 +469,7 @@ def watering_device_telemetry(report: WateringDeviceTelemetry):
                 "FAILED",
                 report.error_message or "Watering device error",
             )
+
             log_event(
                 conn,
                 "WATERING_DEVICE_ERROR",
