@@ -65,7 +65,7 @@ def init_db():
 
         CREATE TABLE IF NOT EXISTS agv_status (
             id INTEGER PRIMARY KEY CHECK (id = 1),
-            state TEXT NOT NULL DEFAULT 'IDLE',
+            state TEXT NOT NULL DEFAULT 'STOP',
             position INTEGER NOT NULL DEFAULT 0,
             battery REAL NOT NULL DEFAULT 100,
             current_task_id INTEGER,
@@ -74,7 +74,7 @@ def init_db():
 
         CREATE TABLE IF NOT EXISTS watering_device_status (
             id INTEGER PRIMARY KEY CHECK (id = 1),
-            state TEXT NOT NULL DEFAULT 'IDLE',
+            state TEXT NOT NULL DEFAULT 'STOP',
             pump INTEGER NOT NULL DEFAULT 0,
             current_task_id INTEGER,
             updated_at TEXT NOT NULL
@@ -112,7 +112,7 @@ def init_db():
         conn.execute("""
             INSERT OR IGNORE INTO agv_status
             (id, state, position, battery, current_task_id, updated_at)
-            VALUES (1, 'IDLE', 0, 100, NULL, ?)
+            VALUES (1, 'STOP', 0, 100, NULL, ?)
         """, (ts,))
 
         conn.execute("""

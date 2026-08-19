@@ -100,18 +100,15 @@ def get_task(conn, task_id: int):
 
 
 def get_active_task(conn):
-    """AGV가 처리할 가장 오래된 진행 중 Task와 목적지 정보를 반환한다."""
+    """AGV가 처리할 가장 오래된 활성 Task를 반환한다."""
     qmarks = ",".join("?" for _ in ACTIVE_TASK_STATUSES)
+
     return conn.execute(
         f"""
-        SELECT
-            t.*,
-            p.position AS target_position,
-            p.name AS plant_name
-        FROM watering_tasks t
-        JOIN plants p ON p.id=t.plant_id
-        WHERE t.status IN ({qmarks})
-        ORDER BY t.id ASC
+        SELECT *
+        FROM watering_tasks
+        WHERE status IN ({qmarks})
+        ORDER BY id ASC
         LIMIT 1
         """,
         ACTIVE_TASK_STATUSES,

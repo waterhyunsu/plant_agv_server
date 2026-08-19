@@ -1,7 +1,6 @@
-"""Plant Watering AGV 중앙 서버의 HTTP REST API.
+# Plant Watering AGV 중앙 서버의 HTTP REST API.
+# 센서, AGV, 급수 모터 Arduino2, GUI는 이 파일의 API를 통해 상태와 명령을 주고받는다.
 
-센서, AGV, 급수 모터 Arduino2, GUI는 이 파일의 API를 통해 상태와 명령을 주고받는다.
-"""
 
 from contextlib import asynccontextmanager
 
@@ -11,12 +10,10 @@ from fastapi.middleware.cors import CORSMiddleware
 from .db import init_db, get_db, now_iso
 from .schemas import (
     MoistureReport,
-    ManualWateringRequest,
     AGVTelemetry,
     WateringDeviceTelemetry,
 )
 from .services import (
-    ACTIVE_TASK_STATUSES,
     create_task,
     get_active_task,
     get_plant,
@@ -43,7 +40,7 @@ app = FastAPI(
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],  # 모든 도메인에서 접근 허용
-    allow_credentials=True,
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -76,7 +73,7 @@ def dashboard():
         ]
 
         agv = dict(conn.execute("""
-            SELECT state, position, battery, current_task_id, updated_at
+            SELECT state, battery, current_task_id, updated_at
             FROM agv_status
             WHERE id=1
         """).fetchone())
@@ -192,10 +189,10 @@ def report_moisture(plant_id: int, report: MoistureReport):
 
 @app.get("/api/agv/status")
 def get_agv_status():
-    """현재 AGV의 상태, 위치, 배터리 및 수행 중 Task를 반환한다."""
+    """현재 AGV의 상태, 배터리 및 수행 중 Task를 반환한다."""
     with get_db() as conn:
         return dict(conn.execute("""
-            SELECT state, position, battery, current_task_id, updated_at
+            SELECT state, battery, current_task_id, updated_at
             FROM agv_status
             WHERE id=1
         """).fetchone())
@@ -203,74 +200,109 @@ def get_agv_status():
 
 @app.get("/api/agv/command")
 def get_agv_command():
-    """AGV가 polling하여 다음 이동 명령을 받는 API."""
+    """AGV가 polling하여 GO/RETURN/WAIT 명령을 받는 API."""
     with get_db() as conn:
+        agv = conn.execute("""
+            SELECT state, current_task_id
+            FROM agv_status
+            WHERE id=1
+        """).fetchone()
+
+        # 1. 아직 수행해야 할 Task가 있으면 순서대로 처리한다.
         task = get_active_task(conn)
 
-        if task is None:
-            return {"command": "WAIT"}
+        if task is not None:
+            if task["status"] == "QUEUED":
+                set_task_status(conn, task["id"], "MOVING")
 
-        # 처음 명령을 가져간 순간 Task를 MOVING으로 변경한다.
-        # 이후 polling에는 같은 task_id를 반환해 AGV가 명령을 계속 확인할 수 있다.
-        if task["status"] == "QUEUED":
-            set_task_status(conn, task["id"], "MOVING")
+                conn.execute("""
+                    UPDATE agv_status
+                    SET state='GO',
+                        current_task_id=?,
+                        updated_at=?
+                    WHERE id=1
+                """, (task["id"], now_iso()))
 
-            conn.execute("""
-                UPDATE agv_status
-                SET state='MOVING',
-                    current_task_id=?,
-                    updated_at=?
-                WHERE id=1
-            """, (task["id"], now_iso()))
+                log_event(
+                    conn,
+                    "AGV_DISPATCH",
+                    f"AGV dispatched to plant {task['plant_id']}",
+                    task["id"],
+                )
 
-            # report는 이 함수에 존재하지 않는다. 출동 시에는 Task id로 이벤트를 기록한다.
-            log_event(
-                conn,
-                "AGV_DISPATCH",
-                f"AGV dispatched to plant {task['plant_id']}",
-                task["id"],
-            )
+            elif task["status"] == "MOVING":
+                # 이미 이동 중인 Task는 같은 GO 명령을 유지한다.
+                pass
 
-        elif task["status"] == "MOVING":
-            pass
+            else:
+                return {"command": "WAIT"}
 
-        else:
-            return {"command": "WAIT"}
+            return {
+                "command": "GO",
+                "task_id": task["id"],
+                "plant_id": task["plant_id"],
+            }
 
-        return {
-            "command": "GO_TO_PLANT",
-            "task_id": task["id"],
-            "plant_id": task["plant_id"],
-            "target_position": task["target_position"],
-        }
+        # 2. 더 이상 처리할 활성 Task가 없을 때만 복귀를 시작한다.
+        #    즉 여러 화분이 DRY라면 마지막 Task까지 순서대로 처리한 뒤 복귀한다.
+        if agv["current_task_id"] is not None and agv["state"] == "STOP":
+            completed_task = conn.execute("""
+                SELECT id, status
+                FROM watering_tasks
+                WHERE id=?
+            """, (agv["current_task_id"],)).fetchone()
+
+            if completed_task is not None and completed_task["status"] == "COMPLETED":
+                conn.execute("""
+                    UPDATE agv_status
+                    SET state='TURN',
+                        updated_at=?
+                    WHERE id=1
+                """, (now_iso(),))
+
+                log_event(
+                    conn,
+                    "AGV_RETURN",
+                    "all queued watering tasks completed; AGV returning home",
+                    completed_task["id"],
+                )
+
+                return {
+                    "command": "RETURN",
+                    "task_id": completed_task["id"],
+                }
+
+        return {"command": "WAIT"}
 
 
 @app.post("/api/agv/telemetry")
 def agv_telemetry(report: AGVTelemetry):
-    """AGV의 이동·도착·오류를 저장하고 Task 상태를 다음 단계로 넘긴다."""
+    """AGV의 STOP/GO/TURN/ERROR 상태를 저장하고 Task를 갱신한다."""
     with get_db() as conn:
         ts = now_iso()
 
         conn.execute("""
             UPDATE agv_status
-            SET state=?, position=?, battery=?,
-                current_task_id=?, updated_at=?
+            SET state=?, battery=?, current_task_id=?, updated_at=?
             WHERE id=1
         """, (
             report.state,
-            report.position,
             report.battery,
             report.task_id,
             ts,
         ))
 
         if report.task_id is None:
-            return {"ok": True}
+            return {
+                "ok": True,
+                "task_id": None,
+                "state": report.state,
+            }
 
         task = get_task(conn, report.task_id)
 
-        # 도착 보고가 오면 급수 모터 Arduino2가 WATER 명령을 가져갈 수 있는 ARRIVED 상태가 된다.
-        if report.state == "ARRIVED":
+        # STOP + 진행 중 Task는 목표 화분을 감지하고 정지한 상태로 판단한다.
+        if report.state == "STOP":
             if task["status"] in ("MOVING", "QUEUED"):
                 set_task_status(conn, report.task_id, "ARRIVED")
 
@@ -296,6 +328,7 @@ def agv_telemetry(report: AGVTelemetry):
                 report.task_id,
             )
 
+        # GO/TURN은 AGV 물리 동작 상태만 기록한다.
         return {
             "ok": True,
             "task_id": report.task_id,
@@ -454,31 +487,6 @@ def get_watering_tasks():
                 LIMIT 100
             """).fetchall()
         ]
-
-
-@app.post("/api/watering")
-def create_manual_watering(request: ManualWateringRequest):
-    """GUI의 강제 급수 요청을 Task로 등록한다. AGV를 직접 제어하지는 않는다."""
-    with get_db() as conn:
-        get_plant(conn, request.plant_id)
-
-        task_id = create_task(
-            conn,
-            request.plant_id,
-            "MANUAL",
-        )
-
-        if task_id is None:
-            raise HTTPException(
-                409,
-                "Active watering task already exists for this plant",
-            )
-
-        return {
-            "task_id": task_id,
-            "plant_id": request.plant_id,
-            "status": "QUEUED",
-        }
 
 
 @app.get("/api/watering/log")

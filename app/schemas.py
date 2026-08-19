@@ -5,7 +5,7 @@ from pydantic import BaseModel, Field
 
 
 # 허용 상태를 제한해 오탈자나 정의되지 않은 상태값이 DB에 저장되는 것을 막는다.
-AGVState = Literal["IDLE", "MOVING", "ARRIVED", "ERROR"]
+AGVState = Literal["STOP", "GO", "TURN", "ERROR"]
 WateringDeviceState = Literal["IDLE", "WATERING", "COMPLETED", "ERROR"]
 
 
@@ -23,7 +23,6 @@ class AGVTelemetry(BaseModel):
     """AGV가 이동 과정 또는 오류를 서버에 알릴 때 사용하는 형식."""
     task_id: Optional[int] = None
     state: AGVState
-    position: int = 0
     battery: float = Field(ge=0, le=100)
     error_message: Optional[str] = None
 
