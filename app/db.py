@@ -3,6 +3,7 @@
 import sqlite3
 from contextlib import contextmanager
 from datetime import datetime
+
 from .config import DB_PATH
 
 
@@ -16,6 +17,7 @@ def get_db():
     """요청 단위 DB 연결을 열고, 정상 종료 시 변경 내용을 저장한다."""
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
+
     try:
         yield conn
         conn.commit()
@@ -100,13 +102,15 @@ def init_db():
                 (1, "화분 1", 0, 50, 30, "NORMAL", now_iso()),
                 (2, "화분 2", 100, 50, 30, "NORMAL", now_iso()),
             ]
+
             conn.executemany("""
                 INSERT INTO plants
                 (id, name, position, moisture, threshold, status, updated_at)
                 VALUES (?, ?, ?, ?, ?, ?, ?)
             """, plants)
 
-        # AGV와 급수 모터 Arduino2는 각각 한 대를 관리하므로 id=1인 상태 행을 사용한다.
+        # AGV와 급수 모터 Arduino2는 각각 한 대를 관리하므로
+        # id=1인 상태 행을 사용한다.
         ts = now_iso()
 
         conn.execute("""

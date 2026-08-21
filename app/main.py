@@ -21,6 +21,8 @@ from .services import (
     set_task_status,
     complete_task,
     log_event,
+    get_moisture_history,
+    get_system_logs,
 )
 
 
@@ -128,17 +130,25 @@ def get_plants():
 
 @app.post("/api/plants/{plant_id}/moisture")
 def report_moisture(plant_id: int, report: MoistureReport):
-    """센서 수분값을 저장하고 NORMAL→DRY 전환 시 자동 Task를 만든다."""
+    """
+    센서 수분값을 저장하고 NORMAL→DRY 전환 시 자동 Task를 만든다.
+
+    센서가 전송한 시각은 사용하지 않고,
+    서버가 데이터를 수신한 시각을 created_at으로 기록한다.
+    """
     with get_db() as conn:
         plant = get_plant(conn, plant_id)
+
         # 임계값 미만일 때만 DRY로 판단한다.
         new_status = (
             "DRY"
             if report.moisture < plant["threshold"]
             else "NORMAL"
         )
+
         previous_status = plant["status"]
 
+        # 서버 수신 시각을 측정/저장 시각으로 사용한다.
         ts = now_iso()
 
         conn.execute("""
@@ -152,6 +162,7 @@ def report_moisture(plant_id: int, report: MoistureReport):
             plant_id,
         ))
 
+        # 1분 원본 데이터를 그대로 저장한다.
         conn.execute("""
             INSERT INTO moisture_log
             (plant_id, moisture, status, created_at)
@@ -181,6 +192,77 @@ def report_moisture(plant_id: int, report: MoistureReport):
             "task_created": task_id is not None,
             "task_id": task_id,
         }
+
+
+@app.get("/api/plants/{plant_id}/moisture/realtime")
+def get_realtime_moisture(plant_id: int):
+    """
+    실시간 GUI용 최근 수분 데이터를 반환한다.
+
+    DB에 저장된 1분 단위 원본 데이터를 그대로 반환한다.
+    최근 60분 데이터를 반환한다.
+    """
+    with get_db() as conn:
+        # 화분 존재 여부 확인
+        get_plant(conn, plant_id)
+
+        rows = conn.execute("""
+            SELECT
+                plant_id,
+                moisture,
+                created_at AS measured_at
+            FROM moisture_log
+            WHERE plant_id=?
+            ORDER BY created_at DESC
+            LIMIT 60
+        """, (plant_id,)).fetchall()
+
+        # GUI에서 시간 순서대로 그릴 수 있도록 오래된 데이터부터 반환한다.
+        return [
+            dict(row)
+            for row in reversed(rows)
+        ]
+
+
+@app.get("/api/plants/{plant_id}/moisture/history")
+def get_moisture_history_api(
+    plant_id: int,
+    date: str,
+):
+    """
+    특정 날짜의 전체 토양 수분 이력을 조회한다.
+    date:
+        YYYY-MM-DD
+    하루 전체(00:00:00 ~ 23:59:59)를
+    5분 단위로 집계하여 반환한다.
+
+    DB의 1분 원본 데이터는 그대로 보존하고,
+    API 응답에서는 5분 단위 평균값으로 집계한다.
+    """
+    with get_db() as conn:
+        # 화분 존재 여부 확인
+        get_plant(conn, plant_id)
+
+        return get_moisture_history(
+            conn,
+            plant_id,
+            date,
+        )
+
+
+# =========================================================
+# System Logs
+# =========================================================
+
+@app.get("/api/system/logs")
+def get_logs():
+    """
+    서버/AGV/급수장치 등의 최근 시스템 이벤트 로그를 반환한다.
+
+    GUI는 이 API를 polling하여 터미널 형태의 로그 화면을 구성한다.
+    """
+    with get_db() as conn:
+        return get_system_logs(conn)
 
 
 # =========================================================
@@ -244,7 +326,6 @@ def get_agv_command():
             }
 
         # 2. 더 이상 처리할 활성 Task가 없을 때만 복귀를 시작한다.
-        #    즉 여러 화분이 DRY라면 마지막 Task까지 순서대로 처리한 뒤 복귀한다.
         if agv["current_task_id"] is not None and agv["state"] == "STOP":
             completed_task = conn.execute("""
                 SELECT id, status
@@ -252,7 +333,10 @@ def get_agv_command():
                 WHERE id=?
             """, (agv["current_task_id"],)).fetchone()
 
-            if completed_task is not None and completed_task["status"] == "COMPLETED":
+            if (
+                completed_task is not None
+                and completed_task["status"] == "COMPLETED"
+            ):
                 conn.execute("""
                     UPDATE agv_status
                     SET state='TURN',
@@ -304,7 +388,11 @@ def agv_telemetry(report: AGVTelemetry):
         # STOP + 진행 중 Task는 목표 화분을 감지하고 정지한 상태로 판단한다.
         if report.state == "STOP":
             if task["status"] in ("MOVING", "QUEUED"):
-                set_task_status(conn, report.task_id, "ARRIVED")
+                set_task_status(
+                    conn,
+                    report.task_id,
+                    "ARRIVED",
+                )
 
                 log_event(
                     conn,
@@ -352,6 +440,7 @@ def get_watering_device_status():
 
         result = dict(row)
         result["pump"] = bool(result["pump"])
+
         return result
 
 
@@ -372,7 +461,11 @@ def get_watering_command():
 
         # Arduino2가 명령을 가져가면 급수 중(WATERING)으로 바꾸고 펌프 상태를 켠다.
         if task["status"] == "ARRIVED":
-            set_task_status(conn, task["id"], "WATERING")
+            set_task_status(
+                conn,
+                task["id"],
+                "WATERING",
+            )
 
             conn.execute("""
                 UPDATE watering_device_status
@@ -398,7 +491,9 @@ def get_watering_command():
 
 
 @app.post("/api/watering/telemetry")
-def watering_device_telemetry(report: WateringDeviceTelemetry):
+def watering_device_telemetry(
+    report: WateringDeviceTelemetry,
+):
     """급수 모터 Arduino2의 급수 시작·완료·오류를 저장하고 Task 및 이력을 갱신한다."""
     with get_db() as conn:
         ts = now_iso()
