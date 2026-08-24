@@ -48,7 +48,7 @@ Task 상태: `QUEUED → MOVING → ARRIVED → WATERING → COMPLETED`
 { "task_id": 1, "state": "ARRIVED", "position": 200, "battery": 86 }
 ```
 
-상태: `IDLE`, `MOVING`, `ARRIVED`, `ERROR`
+상태: `STOP`, `GO`, `TURN`, `ERROR`
 
 ## 급수 모터 Arduino2
 
