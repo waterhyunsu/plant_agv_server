@@ -10,6 +10,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from .db import init_db, get_db, now_iso
 from .schemas import (
     MoistureReport,
+    ManualWateringRequest,
     AGVTelemetry,
     WateringDeviceTelemetry,
 )
@@ -622,3 +623,30 @@ def get_watering_log():
                 LIMIT 100
             """).fetchall()
         ]
+
+@app.post("/api/watering")
+def create_manual_watering(request: ManualWateringRequest):
+    """GUI에서 특정 화분의 수동 급수 Task를 생성한다."""
+    with get_db() as conn:
+        # 존재하지 않는 화분인지 확인
+        get_plant(conn, request.plant_id)
+
+        # 해당 화분에 이미 진행 중인 Task가 있으면 중복 급수를 막는다.
+        task_id = create_task(
+            conn,
+            request.plant_id,
+            "MANUAL",
+        )
+
+        if task_id is None:
+            raise HTTPException(
+                status_code=409,
+                detail="Active watering task already exists for this plant",
+            )
+
+        return {
+            "task_id": task_id,
+            "plant_id": request.plant_id,
+            "status": "QUEUED",
+            "source": "MANUAL",
+        }
