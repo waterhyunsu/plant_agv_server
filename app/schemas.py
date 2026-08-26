@@ -23,7 +23,6 @@ class AGVTelemetry(BaseModel):
     """AGV가 이동 과정 또는 오류를 서버에 알릴 때 사용하는 형식."""
     task_id: Optional[int] = None
     state: AGVState
-    battery: float = Field(ge=0, le=100)
     error_message: Optional[str] = None
 
 

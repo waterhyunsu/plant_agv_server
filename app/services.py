@@ -269,6 +269,7 @@ def create_task(
     conn,
     plant_id: int,
     source: str,
+    amount_ml: float,
 ):
     """중복을 검사한 뒤 대기(QUEUED) 상태의 급수 Task를 생성한다."""
     ts = now_iso()
@@ -280,11 +281,12 @@ def create_task(
 
     cur = conn.execute("""
         INSERT INTO watering_tasks
-        (plant_id, status, source, created_at, updated_at)
-        VALUES (?, 'QUEUED', ?, ?, ?)
+        (plant_id, status, source, amount_ml, created_at, updated_at)
+        VALUES (?, 'QUEUED', ?, ?, ?, ?)
     """, (
         plant_id,
         source,
+        amount_ml,
         ts,
         ts,
     ))

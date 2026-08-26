@@ -47,15 +47,16 @@ def init_db():
             created_at TEXT NOT NULL
         );
 
-        CREATE TABLE IF NOT EXISTS watering_tasks (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            plant_id INTEGER NOT NULL,
-            status TEXT NOT NULL,
-            source TEXT NOT NULL,
-            created_at TEXT NOT NULL,
-            updated_at TEXT NOT NULL,
-            error_message TEXT
-        );
+            CREATE TABLE IF NOT EXISTS watering_tasks (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                plant_id INTEGER NOT NULL,
+                status TEXT NOT NULL,
+                source TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                amount_ml REAL NOT NULL,
+                updated_at TEXT NOT NULL,
+                error_message TEXT
+            );
 
         CREATE TABLE IF NOT EXISTS watering_log (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -69,7 +70,6 @@ def init_db():
             id INTEGER PRIMARY KEY CHECK (id = 1),
             state TEXT NOT NULL DEFAULT 'STOP',
             position INTEGER NOT NULL DEFAULT 0,
-            battery REAL NOT NULL DEFAULT 100,
             current_task_id INTEGER,
             updated_at TEXT NOT NULL
         );
@@ -115,8 +115,8 @@ def init_db():
 
         conn.execute("""
             INSERT OR IGNORE INTO agv_status
-            (id, state, position, battery, current_task_id, updated_at)
-            VALUES (1, 'STOP', 0, 100, NULL, ?)
+            (id, state, position, current_task_id, updated_at)
+            VALUES (1, 'STOP', 0, NULL, ?)
         """, (ts,))
 
         conn.execute("""

@@ -7,6 +7,8 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 
+from .config import DEFAULT_WATERING_AMOUNT_ML
+
 from .db import init_db, get_db, now_iso
 from .schemas import (
     MoistureReport,
@@ -76,7 +78,7 @@ def dashboard():
         ]
 
         agv = dict(conn.execute("""
-            SELECT state, battery, current_task_id, updated_at
+            SELECT state, current_task_id, updated_at
             FROM agv_status
             WHERE id=1
         """).fetchone())
@@ -184,6 +186,7 @@ def report_moisture(plant_id: int, report: MoistureReport):
                 conn,
                 plant_id,
                 "AUTO",
+                DEFAULT_WATERING_AMOUNT_ML,
             )
 
         return {
@@ -275,7 +278,7 @@ def get_agv_status():
     """현재 AGV의 상태, 배터리 및 수행 중 Task를 반환한다."""
     with get_db() as conn:
         return dict(conn.execute("""
-            SELECT state, battery, current_task_id, updated_at
+            SELECT state, current_task_id, updated_at
             FROM agv_status
             WHERE id=1
         """).fetchone())
@@ -326,8 +329,8 @@ def get_agv_command():
                 "plant_id": task["plant_id"],
             }
 
-        # 2. 더 이상 처리할 활성 Task가 없을 때만 복귀를 시작한다.
-        if agv["current_task_id"] is not None and agv["state"] == "STOP":
+        # 2. 더 이상 처리할 활성 Task가 없을 때 복귀 명령 발송
+        if agv["current_task_id"] is not None:
             completed_task = conn.execute("""
                 SELECT id, status
                 FROM watering_tasks
@@ -337,10 +340,12 @@ def get_agv_command():
             if (
                 completed_task is not None
                 and completed_task["status"] == "COMPLETED"
+                and agv["state"] != "RETURN"  # 이미 RETURN 명령을 받아서 복귀 중인 경우는 제외
             ):
+                # 명령 발송 시 state를 'RETURN'으로 변경하여 중복 RETURN 방지
                 conn.execute("""
                     UPDATE agv_status
-                    SET state='TURN',
+                    SET state='RETURN',
                         updated_at=?
                     WHERE id=1
                 """, (now_iso(),))
@@ -366,18 +371,12 @@ def agv_telemetry(report: AGVTelemetry):
     with get_db() as conn:
         ts = now_iso()
 
-        conn.execute("""
-            UPDATE agv_status
-            SET state=?, battery=?, current_task_id=?, updated_at=?
-            WHERE id=1
-        """, (
-            report.state,
-            report.battery,
-            report.task_id,
-            ts,
-        ))
-
         if report.task_id is None:
+            conn.execute("""
+                UPDATE agv_status
+                SET state=?, updated_at=?
+                WHERE id=1
+            """, (report.state, ts))
             return {
                 "ok": True,
                 "task_id": None,
@@ -386,21 +385,49 @@ def agv_telemetry(report: AGVTelemetry):
 
         task = get_task(conn, report.task_id)
 
-        # STOP + 진행 중 Task는 목표 화분을 감지하고 정지한 상태로 판단한다.
+        # STOP 신호 처리
         if report.state == "STOP":
-            if task["status"] in ("MOVING", "QUEUED"):
+            # 1. 화분 도착인 경우 (이동 중 STOP)
+            if task and task["status"] in ("MOVING", "QUEUED"):
                 set_task_status(
                     conn,
                     report.task_id,
                     "ARRIVED",
                 )
-
                 log_event(
                     conn,
                     "AGV_ARRIVED",
                     f"AGV arrived at plant {task['plant_id']}",
                     report.task_id,
                 )
+                
+                conn.execute("""
+                    UPDATE agv_status
+                    SET state=?, current_task_id=?, updated_at=?
+                    WHERE id=1
+                """, (report.state, report.task_id, ts))
+
+            # 2. 복귀 완료 후 초기 위치 정지인 경우 (이미 COMPLETED인 Task)
+            elif task and task["status"] == "COMPLETED":
+                # 복귀 완료되었으므로 current_task_id를 None으로 초기화!
+                conn.execute("""
+                    UPDATE agv_status
+                    SET state=?, current_task_id=NULL, updated_at=?
+                    WHERE id=1
+                """, (report.state, ts))
+                
+                log_event(
+                    conn,
+                    "AGV_HOME",
+                    "AGV returned to home position and stopped.",
+                    report.task_id,
+                )
+            else:
+                conn.execute("""
+                    UPDATE agv_status
+                    SET state=?, current_task_id=?, updated_at=?
+                    WHERE id=1
+                """, (report.state, report.task_id, ts))
 
         elif report.state == "ERROR":
             set_task_status(
@@ -409,15 +436,24 @@ def agv_telemetry(report: AGVTelemetry):
                 "FAILED",
                 report.error_message or "AGV error",
             )
-
             log_event(
                 conn,
                 "AGV_ERROR",
                 report.error_message or "AGV error",
                 report.task_id,
             )
+            conn.execute("""
+                UPDATE agv_status
+                SET state=?, current_task_id=?, updated_at=?
+                WHERE id=1
+            """, (report.state, report.task_id, ts))
+        else:
+            conn.execute("""
+                UPDATE agv_status
+                SET state=?, current_task_id=?, updated_at=?
+                WHERE id=1
+            """, (report.state, report.task_id, ts))
 
-        # GO/TURN은 AGV 물리 동작 상태만 기록한다.
         return {
             "ok": True,
             "task_id": report.task_id,
@@ -488,6 +524,7 @@ def get_watering_command():
             "command": "WATER",
             "task_id": task["id"],
             "plant_id": task["plant_id"],
+            "amount_ml": task["amount_ml"]
         }
 
 
@@ -636,6 +673,7 @@ def create_manual_watering(request: ManualWateringRequest):
             conn,
             request.plant_id,
             "MANUAL",
+            DEFAULT_WATERING_AMOUNT_ML,
         )
 
         if task_id is None:
