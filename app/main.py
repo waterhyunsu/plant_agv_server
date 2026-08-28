@@ -1,7 +1,6 @@
 # Plant Watering AGV 중앙 서버의 HTTP REST API.
 # 센서, AGV, 급수 모터 Arduino2, GUI는 이 파일의 API를 통해 상태와 명령을 주고받는다.
 
-
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException
@@ -44,7 +43,7 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # 모든 도메인에서 접근 허용
+    allow_origins=["*"],
     allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -57,7 +56,6 @@ app.add_middleware(
 
 @app.get("/api/health")
 def health():
-    """서버 실행 여부를 확인하는 경량 상태 확인 API."""
     return {
         "status": "ok",
         "service": "plant-agv-server",
@@ -66,7 +64,6 @@ def health():
 
 @app.get("/api/dashboard")
 def dashboard():
-    """GUI 첫 화면용 통합 상태(화분·AGV·급수 모터 Arduino2·최근 Task)를 반환한다."""
     with get_db() as conn:
         plants = [
             dict(row)
@@ -119,7 +116,6 @@ def dashboard():
 
 @app.get("/api/plants")
 def get_plants():
-    """모든 화분의 현재 수분 상태와 설정값을 반환한다."""
     with get_db() as conn:
         return [
             dict(row)
@@ -133,16 +129,9 @@ def get_plants():
 
 @app.post("/api/plants/{plant_id}/moisture")
 def report_moisture(plant_id: int, report: MoistureReport):
-    """
-    센서 수분값을 저장하고 NORMAL→DRY 전환 시 자동 Task를 만든다.
-
-    센서가 전송한 시각은 사용하지 않고,
-    서버가 데이터를 수신한 시각을 created_at으로 기록한다.
-    """
     with get_db() as conn:
         plant = get_plant(conn, plant_id)
 
-        # 임계값 미만일 때만 DRY로 판단한다.
         new_status = (
             "DRY"
             if report.moisture < plant["threshold"]
@@ -150,8 +139,6 @@ def report_moisture(plant_id: int, report: MoistureReport):
         )
 
         previous_status = plant["status"]
-
-        # 서버 수신 시각을 측정/저장 시각으로 사용한다.
         ts = now_iso()
 
         conn.execute("""
@@ -165,7 +152,6 @@ def report_moisture(plant_id: int, report: MoistureReport):
             plant_id,
         ))
 
-        # 1분 원본 데이터를 그대로 저장한다.
         conn.execute("""
             INSERT INTO moisture_log
             (plant_id, moisture, status, created_at)
@@ -179,8 +165,6 @@ def report_moisture(plant_id: int, report: MoistureReport):
 
         task_id = None
 
-        # NORMAL → DRY로 전환될 때만 자동 Task를 생성한다.
-        # DRY가 반복 보고되는 동안에는 중복 Task를 만들지 않는다.
         if new_status == "DRY" and previous_status != "DRY":
             task_id = create_task(
                 conn,
@@ -200,14 +184,7 @@ def report_moisture(plant_id: int, report: MoistureReport):
 
 @app.get("/api/plants/{plant_id}/moisture/realtime")
 def get_realtime_moisture(plant_id: int):
-    """
-    실시간 GUI용 최근 수분 데이터를 반환한다.
-
-    DB에 저장된 1분 단위 원본 데이터를 그대로 반환한다.
-    최근 60분 데이터를 반환한다.
-    """
     with get_db() as conn:
-        # 화분 존재 여부 확인
         get_plant(conn, plant_id)
 
         rows = conn.execute("""
@@ -221,7 +198,6 @@ def get_realtime_moisture(plant_id: int):
             LIMIT 60
         """, (plant_id,)).fetchall()
 
-        # GUI에서 시간 순서대로 그릴 수 있도록 오래된 데이터부터 반환한다.
         return [
             dict(row)
             for row in reversed(rows)
@@ -229,29 +205,10 @@ def get_realtime_moisture(plant_id: int):
 
 
 @app.get("/api/plants/{plant_id}/moisture/history")
-def get_moisture_history_api(
-    plant_id: int,
-    date: str,
-):
-    """
-    특정 날짜의 전체 토양 수분 이력을 조회한다.
-    date:
-        YYYY-MM-DD
-    하루 전체(00:00:00 ~ 23:59:59)를
-    5분 단위로 집계하여 반환한다.
-
-    DB의 1분 원본 데이터는 그대로 보존하고,
-    API 응답에서는 5분 단위 평균값으로 집계한다.
-    """
+def get_moisture_history_api(plant_id: int, date: str):
     with get_db() as conn:
-        # 화분 존재 여부 확인
         get_plant(conn, plant_id)
-
-        return get_moisture_history(
-            conn,
-            plant_id,
-            date,
-        )
+        return get_moisture_history(conn, plant_id, date)
 
 
 # =========================================================
@@ -260,11 +217,6 @@ def get_moisture_history_api(
 
 @app.get("/api/system/logs")
 def get_logs():
-    """
-    서버/AGV/급수장치 등의 최근 시스템 이벤트 로그를 반환한다.
-
-    GUI는 이 API를 polling하여 터미널 형태의 로그 화면을 구성한다.
-    """
     with get_db() as conn:
         return get_system_logs(conn)
 
@@ -275,7 +227,6 @@ def get_logs():
 
 @app.get("/api/agv/status")
 def get_agv_status():
-    """현재 AGV의 상태, 배터리 및 수행 중 Task를 반환한다."""
     with get_db() as conn:
         return dict(conn.execute("""
             SELECT state, current_task_id, updated_at
@@ -294,10 +245,11 @@ def get_agv_command():
             WHERE id=1
         """).fetchone()
 
-        # 1. 아직 수행해야 할 Task가 있으면 순서대로 처리한다.
+        # 1. 수행해야 할 활성 Task(QUEUED 또는 MOVING) 조회
         task = get_active_task(conn)
 
         if task is not None:
+            # 1-1. 신규 Task인 경우 (QUEUED -> MOVING 전환 및 GO 명령 발송)
             if task["status"] == "QUEUED":
                 set_task_status(conn, task["id"], "MOVING")
 
@@ -316,20 +268,25 @@ def get_agv_command():
                     task["id"],
                 )
 
-            elif task["status"] == "MOVING":
-                # 이미 이동 중인 Task는 같은 GO 명령을 유지한다.
-                pass
+                return {
+                    "command": "GO",
+                    "task_id": task["id"],
+                    "plant_id": task["plant_id"],
+                }
 
+            # 1-2. 이미 MOVING 중인 Task인 경우
+            elif task["status"] == "MOVING":
+                return {
+                    "command": "GO",
+                    "task_id": task["id"],
+                    "plant_id": task["plant_id"],
+                }
+
+            # 1-3. 화분에 도착해서 급수 중인 경우 (ARRIVED, WATERING) ➔ AGV는 제자리 대기
             else:
                 return {"command": "WAIT"}
 
-            return {
-                "command": "GO",
-                "task_id": task["id"],
-                "plant_id": task["plant_id"],
-            }
-
-        # 2. 더 이상 처리할 활성 Task가 없을 때 복귀 명령 발송
+        # 2. 더 이상 처리할 활성 Task가 없고, 이전 Task가 COMPLETED된 경우 ➔ RETURN 처리
         if agv["current_task_id"] is not None:
             completed_task = conn.execute("""
                 SELECT id, status
@@ -340,9 +297,8 @@ def get_agv_command():
             if (
                 completed_task is not None
                 and completed_task["status"] == "COMPLETED"
-                and agv["state"] != "RETURN"  # 이미 RETURN 명령을 받아서 복귀 중인 경우는 제외
+                and agv["state"] != "RETURN"
             ):
-                # 명령 발송 시 state를 'RETURN'으로 변경하여 중복 RETURN 방지
                 conn.execute("""
                     UPDATE agv_status
                     SET state='RETURN',
@@ -367,7 +323,6 @@ def get_agv_command():
 
 @app.post("/api/agv/telemetry")
 def agv_telemetry(report: AGVTelemetry):
-    """AGV의 STOP/GO/TURN/ERROR 상태를 저장하고 Task를 갱신한다."""
     with get_db() as conn:
         ts = now_iso()
 
@@ -385,9 +340,7 @@ def agv_telemetry(report: AGVTelemetry):
 
         task = get_task(conn, report.task_id)
 
-        # STOP 신호 처리
         if report.state == "STOP":
-            # 1. 화분 도착인 경우 (이동 중 STOP)
             if task and task["status"] in ("MOVING", "QUEUED"):
                 set_task_status(
                     conn,
@@ -407,9 +360,7 @@ def agv_telemetry(report: AGVTelemetry):
                     WHERE id=1
                 """, (report.state, report.task_id, ts))
 
-            # 2. 복귀 완료 후 초기 위치 정지인 경우 (이미 COMPLETED인 Task)
             elif task and task["status"] == "COMPLETED":
-                # 복귀 완료되었으므로 current_task_id를 None으로 초기화!
                 conn.execute("""
                     UPDATE agv_status
                     SET state=?, current_task_id=NULL, updated_at=?
@@ -467,7 +418,6 @@ def agv_telemetry(report: AGVTelemetry):
 
 @app.get("/api/watering/device-status")
 def get_watering_device_status():
-    """급수 모터 Arduino2의 상태, 모터 상태 및 수행 중 Task를 반환한다."""
     with get_db() as conn:
         row = conn.execute("""
             SELECT state, pump, current_task_id, updated_at
@@ -483,7 +433,6 @@ def get_watering_device_status():
 
 @app.get("/api/watering/command")
 def get_watering_command():
-    """급수 모터 Arduino2가 polling하여 도착 완료 Task의 WATER 명령을 받는 API."""
     with get_db() as conn:
         task = conn.execute("""
             SELECT *
@@ -496,7 +445,6 @@ def get_watering_command():
         if task is None:
             return {"command": "WAIT"}
 
-        # Arduino2가 명령을 가져가면 급수 중(WATERING)으로 바꾸고 펌프 상태를 켠다.
         if task["status"] == "ARRIVED":
             set_task_status(
                 conn,
@@ -537,7 +485,6 @@ def watering_device_telemetry(
         ts = now_iso()
 
         pump = 1 if report.state == "WATERING" else 0
-
         if report.state in ("COMPLETED", "ERROR"):
             pump = 0
 
@@ -566,12 +513,13 @@ def watering_device_telemetry(
                 )
 
         elif report.state == "COMPLETED":
-            # WATERING 상태의 Task만 완료 처리해 중복 로그 생성을 막는다.
-            if task["status"] != "WATERING":
-                raise HTTPException(
-                    409,
-                    "Task is not in WATERING state",
-                )
+            if task["status"] == "COMPLETED":
+                return {
+                    "ok": True,
+                    "task_id": report.task_id,
+                    "state": report.state,
+                    "note": "already completed",
+                }
 
             set_task_status(
                 conn,
@@ -585,7 +533,6 @@ def watering_device_telemetry(
                 task["plant_id"],
             )
 
-            # 급수 완료 후 급수장치를 대기 상태로 초기화한다.
             conn.execute("""
                 UPDATE watering_device_status
                 SET state='IDLE',
@@ -623,7 +570,6 @@ def watering_device_telemetry(
 
 @app.get("/api/watering/tasks")
 def get_watering_tasks():
-    """GUI에서 작업 진행 상태를 표시할 수 있도록 최근 Task 목록을 반환한다."""
     with get_db() as conn:
         return [
             dict(row)
@@ -644,7 +590,6 @@ def get_watering_tasks():
 
 @app.get("/api/watering/log")
 def get_watering_log():
-    """완료된 급수 이력을 최근 순으로 반환한다."""
     with get_db() as conn:
         return [
             dict(row)
@@ -661,14 +606,12 @@ def get_watering_log():
             """).fetchall()
         ]
 
+
 @app.post("/api/watering")
 def create_manual_watering(request: ManualWateringRequest):
-    """GUI에서 특정 화분의 수동 급수 Task를 생성한다."""
     with get_db() as conn:
-        # 존재하지 않는 화분인지 확인
         get_plant(conn, request.plant_id)
 
-        # 해당 화분에 이미 진행 중인 Task가 있으면 중복 급수를 막는다.
         task_id = create_task(
             conn,
             request.plant_id,
